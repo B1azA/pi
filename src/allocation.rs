@@ -68,6 +68,9 @@ pub(crate) fn set_value_size<T>(ptr: *mut u8, index: isize, value: T) {
     }
 }
 
-pub(crate) fn offset(ptr: &mut *mut u8, offset: isize) {
-    unsafe { *ptr = ptr.offset(offset); }
+pub(crate) fn offset(ptr: *mut u8, offset: isize) -> *mut u8 {
+    unsafe { 
+        let ptr = ptr.offset(offset);
+        ptr
+    }
 }
