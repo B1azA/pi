@@ -1,13 +1,15 @@
 use crate::VM;
 use crate::allocation::*;
 
-pub const INSTRUCTIONS: [fn(&mut VM); 45] = [
+pub const INSTRUCTIONS: [fn(&mut VM); 50] = [
     halt, pu1, pu2, pu4, pu8, pux, set, get, setx, off, cp, load1, load2, load4, load8, and, or,
 //  0     1    2    3    4    5    6    7    8     9     10    11   12    13     14    15    16
     xor, lshift, rshift, add, sub, mul, div, addf, subf, mulf, divf, addd, subd, muld, divd, eq,
 //  17   18      19      20   21   22   23   24    25    26    27    28    29    30    31    32
-    neq, gr, sm, not, jmp, jmpif, jmpifn, ret, call, calldy, fun, fundy
-//  33   34  35  36   37   38     39      40   41    42      44   45
+    neq, gr, sm, not, jmp, jmpif, jmpifn, jmpdy, jmpifdy, jmpifndy, ret, call, calldy, fun, fundy, 
+//  33   34  35  36   37   38     39      40     41       42        43   44    45    46     47
+    ftod, dtof,
+//  48    49
 // Types: u8, i8, u16, i16, u32, i32, u64, i64, f32 (f), f64 (d)
 ];
 
@@ -86,15 +88,14 @@ fn get(vm: &mut VM) {
     vm.ip += 1;
 }
 
-/// pops x (u64) and sets xth byte of a pointer
+/// pops x (u64) and value (u8) and sets xth byte of a pointer to value
 /// 
-/// Layout: 8, data - 2 bytes
+/// Layout: 8 - 1 byte
 fn setx(vm: &mut VM) {
     let x = vm.stack.pop().unwrap();
-    let val = vm.bytecode[vm.ip];
+    let val = vm.stack.pop().unwrap() as u8;
     let ptr = vm.stack[vm.stack.len() - 1] as *mut u8;
     set_value_size(ptr, x as isize, val);
-    vm.ip += 1;
 }
 
 /// pops offset (i64) and offsets a pointer
@@ -402,19 +403,45 @@ fn not(vm: &mut VM) {
     vm.flag = !vm.flag;
 }
 
+/// gets index (u64) and jumps to its location
+/// 
+/// Layout: 37, index, index, index, index, index, index, index, index - 9 bytes
+fn jmp(vm: &mut VM) {
+    let bytes = vm.bytecode[vm.ip..vm.ip + 8].try_into().unwrap();
+    let index = u64::from_be_bytes(bytes);
+    vm.ip = index as usize;
+}
+
+/// gets index (u64), jumps to index location if flag is TRUE
+/// 
+/// Layout: 38, index, index, index, index, index, index, index, index - 9 bytes
+fn jmpif(vm: &mut VM) {
+    if vm.flag {
+        jmp(vm);
+    }
+}
+
+/// gets index (u64), jumps to index location if flag is FALSE
+/// 
+/// Layout: 39, index, index, index, index, index, index, index, index - 9 bytes
+fn jmpifn(vm: &mut VM) {
+    if !vm.flag {
+        jmp(vm);
+    }
+}
 
 /// pops index (u64) and jumps to its location
 /// 
-/// Layout: 37 - 1 byte
-fn jmp(vm: &mut VM) {
+/// Layout: 40 - 1 byte
+fn jmpdy(vm: &mut VM) {
     let index = vm.stack.pop().unwrap();
     vm.ip = index as usize;
 }
 
 /// pops index (u64), jumps to index location if flag is TRUE
 /// 
-/// Layout: 38 - 1 byte
-fn jmpif(vm: &mut VM) {
+/// Layout: 41 - 1 byte
+fn jmpifdy(vm: &mut VM) {
     if vm.flag {
         jmp(vm);
     }
@@ -422,8 +449,8 @@ fn jmpif(vm: &mut VM) {
 
 /// pops index (u64), jumps to index location if flag is FALSE
 /// 
-/// Layout: 39 - 1 byte
-fn jmpifn(vm: &mut VM) {
+/// Layout: 42 - 1 byte
+fn jmpifndy(vm: &mut VM) {
     if !vm.flag {
         jmp(vm);
     }
@@ -431,14 +458,14 @@ fn jmpifn(vm: &mut VM) {
 
 /// returns from function call, jumps to last function pointer
 /// 
-/// Layout: 40 - 1 byte
+/// Layout: 43 - 1 byte
 fn ret(vm: &mut VM) {
     vm.ip = vm.fn_pointers.pop().unwrap();
 }
 
 /// calls a function at index (u64)
 /// 
-/// Layout: 41, index, index, index, index, index, index, index, index - 9 bytes
+/// Layout: 44, index, index, index, index, index, index, index, index - 9 bytes
 fn call(vm: &mut VM) {
     let bytes = vm.bytecode[vm.ip..vm.ip + 8].try_into().unwrap();
     let index = u64::from_be_bytes(bytes);
@@ -449,7 +476,7 @@ fn call(vm: &mut VM) {
 
 /// pops index (u64) and calls a function at it
 /// 
-/// Layout: 42 - 1 byte
+/// Layout: 45 - 1 byte
 fn calldy(vm: &mut VM) {
     let index = vm.stack.pop().unwrap();
     vm.fn_pointers.push(vm.ip);
@@ -458,7 +485,7 @@ fn calldy(vm: &mut VM) {
 
 /// calls an extern function at index
 /// 
-/// Layout: 43, index, index, index, index, index, index, index, index - 9 bytes
+/// Layout: 46, index, index, index, index, index, index, index, index - 9 bytes
 fn fun(vm: &mut VM) {
     let bytes = vm.bytecode[vm.ip..vm.ip + 8].try_into().unwrap();
     let index = u64::from_be_bytes(bytes);
@@ -468,8 +495,30 @@ fn fun(vm: &mut VM) {
 
 /// pops index and calls an extern function at index
 /// 
-/// Layout: 43, index, index, index, index, index, index, index, index - 9 bytes
+/// Layout: 47, index, index, index, index, index, index, index, index - 9 bytes
 fn fundy(vm: &mut VM) {
     let index = vm.stack.pop().unwrap();
     vm.functions[index as usize](vm);
+}
+
+/// pops f (f32) from the stack and converts it to d (f64)
+/// 
+/// Layout: 48 - 1 byte
+fn ftod(vm: &mut VM) {
+    let bytes = (vm.stack.pop().unwrap() as u32).to_be_bytes();
+    let f = f32::from_be_bytes(bytes);
+    let d = f as f64;
+    let result = u64::from_be_bytes(d.to_be_bytes());
+    vm.stack.push(result);
+}
+
+/// pops d (f64) from the stack and converts it to f (f32)
+/// 
+/// Layout: 49 - 1 byte
+fn dtof(vm: &mut VM) {
+    let bytes = vm.stack.pop().unwrap().to_be_bytes();
+    let d = f64::from_be_bytes(bytes);
+    let f = d as f32;
+    let result = u32::from_be_bytes(f.to_be_bytes());
+    vm.stack.push(result as u64);
 }
